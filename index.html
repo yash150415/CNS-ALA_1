@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure Messaging App</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      color: #007acc;
+    }
+    .container {
+      max-width: 700px;
+      margin: auto;
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    textarea {
+      width: 100%;
+      height: 120px;
+      padding: 10px 5px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      resize: vertical;
+    }
+    button {
+      background: #007acc;
+      color: #fff;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-top: 5px;
+    }
+    button:hover {
+      background: #005fa3;
+    }
+    label {
+      font-weight: bold;
+      margin-bottom: 5px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔒 Secure Messaging App</h1>
+
+    <!-- SENDER SECTION -->
+    <div class="section">
+      <h2>Sender</h2>
+      <label for="plaintext">Plain Message:</label>
+      <textarea id="plaintext" placeholder="Type your secret message here..."></textarea><br>
+      <button onclick="encryptAndCopy()">Encrypt & Copy Message</button>
+      <br/>
+
+    </div>
+<br/>
+
+    <div class="section">
+      <label for="encryptedOutput">Encrypted Message (Copy & Share):</label>
+      <textarea id="encryptedOutput" placeholder="Your encrypted message will appear here..."></textarea>
+    </div>
+
+    <!-- RECIPIENT SECTION -->
+    <div class="section">
+      <h2>Recipient</h2>
+      <label for="receivedMessage">Paste Encrypted Message:</label>
+      <textarea id="receivedMessage" placeholder="Paste the encrypted message here..."></textarea><br>
+      <button onclick="decryptMessage()">Decrypt Message</button>
+    </div>
+    <br/>
+
+    <div class="section">
+      <label>Decrypted Plain Message:</label>
+      <textarea id="decryptedOutput" placeholder="Your decrypted message will appear here..." readonly></textarea>
+    </div>
+  </div>
+
+  <script>
+    let rsaKeyPair;
+
+    async function generateRSAKeys() {
+      rsaKeyPair = await window.crypto.subtle.generateKey(
+        {
+          name: "RSA-OAEP",
+          modulusLength: 2048,
+          publicExponent: new Uint8Array([1, 0, 1]),
+          hash: "SHA-256",
+        },
+        true,
+        ["encrypt", "decrypt"]
+      );
+      console.log("RSA keys generated");
+    }
+
+    async function encryptAndCopy() {
+      const plaintext = document.getElementById("plaintext").value;
+      if (!plaintext) {
+        alert("Please enter a message!");
+        return;
+      }
+
+      // 1. Generate AES key
+      const aesKey = await window.crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 },
+        true,
+        ["encrypt", "decrypt"]
+      );
+
+      // 2. Encrypt message with AES
+      const encoder = new TextEncoder();
+      const data = encoder.encode(plaintext);
+      const iv = window.crypto.getRandomValues(new Uint8Array(12)); // random IV
+
+      const encryptedMessage = await window.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        aesKey,
+        data
+      );
+
+      // 3. Encrypt AES key with RSA public key
+      const rawAesKey = await window.crypto.subtle.exportKey("raw", aesKey);
+      const encryptedAESKey = await window.crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        rsaKeyPair.publicKey,
+        rawAesKey
+      );
+
+      // Bundle encrypted data into JSON
+      const encryptedPayload = {
+        encryptedMessage: bufferToBase64(encryptedMessage),
+        encryptedAESKey: bufferToBase64(encryptedAESKey),
+        iv: bufferToBase64(iv)
+      };
+
+      const encryptedText = JSON.stringify(encryptedPayload, null, 2);
+
+      // Display in textarea
+      document.getElementById("encryptedOutput").value = encryptedText;
+
+      // Copy to clipboard
+      await navigator.clipboard.writeText(encryptedText);
+      alert("Encrypted message copied to clipboard! Share it securely.");
+    }
+
+    async function decryptMessage() {
+      const received = document.getElementById("receivedMessage").value;
+      if (!received) {
+        alert("Please paste the encrypted message!");
+        return;
+      }
+
+      let encryptedPayload;
+      try {
+        encryptedPayload = JSON.parse(received);
+      } catch (e) {
+        alert("Invalid encrypted message format!");
+        return;
+      }
+
+      try {
+        // Decode base64 fields
+        const encryptedMessage = base64ToBuffer(encryptedPayload.encryptedMessage);
+        const encryptedAESKey = base64ToBuffer(encryptedPayload.encryptedAESKey);
+        const iv = base64ToBuffer(encryptedPayload.iv);
+
+        // 1. Decrypt AES key with RSA private key
+        const decryptedAESKeyRaw = await window.crypto.subtle.decrypt(
+          { name: "RSA-OAEP" },
+          rsaKeyPair.privateKey,
+          encryptedAESKey
+        );
+
+        const aesKey = await window.crypto.subtle.importKey(
+          "raw",
+          decryptedAESKeyRaw,
+          { name: "AES-GCM" },
+          false,
+          ["decrypt"]
+        );
+
+        // 2. Decrypt message with AES key
+        const decryptedMessageBuffer = await window.crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: iv },
+          aesKey,
+          encryptedMessage
+        );
+
+        const decoder = new TextDecoder();
+        const plaintext = decoder.decode(decryptedMessageBuffer);
+
+        // Display plaintext
+        document.getElementById("decryptedOutput").value = plaintext;
+      } catch (e) {
+        console.error(e);
+        alert("Failed to decrypt message. Check the encrypted data and try again.");
+      }
+    }
+
+    function bufferToBase64(buffer) {
+      return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    }
+
+    function base64ToBuffer(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes.buffer;
+    }
+
+    // Generate RSA keys on page load
+    generateRSAKeys();
+  </script>
+</body>
+</html>
